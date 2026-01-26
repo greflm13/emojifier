@@ -62,7 +62,7 @@ class Emojifier:
 
     @staticmethod
     def _normalize_word_for_match(word: str) -> str:
-        return word.replace("'s", "").replace("'", "")
+        return word.replace("'s", "").replace("'", "").lower()
 
     def _is_exception(self, word: str) -> bool:
         return word in self.exceptions
