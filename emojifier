@@ -2,9 +2,9 @@
 
 import re
 import os
-import sys
 import json
 import random
+import readline
 import argparse
 from typing import Dict, List, Union, Optional
 
@@ -160,16 +160,37 @@ def load_emojifier_from_json(
     )
 
 
+def get_input_from_stdin():
+    readline.set_startup_hook()
+    try:
+        return input()
+    finally:
+        readline.set_startup_hook()
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Adds cringe emojis to text")
-    parser.add_argument(
-        "infile", nargs="?", type=argparse.FileType("r"), default=sys.stdin, help="Read from file (default STDIN)"
+    parser = argparse.ArgumentParser(
+        description="Adds cringe emojis to text",
+        prog=os.path.basename(__file__),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+    parser.add_argument("-f", "--file", type=argparse.FileType("r"), help="Read from FILE instead of standard input")
+
     args = parser.parse_args()
     emojifier = load_emojifier_from_json(os.path.join(SCRIPTDIR, "emojis.json"))
 
-    for text in args.infile:
-        print(emojifier.emojify_text(text.rstrip("\n")))
+    if args.file:
+        for line in args.file:
+            print(emojifier.emojify_text(line.rstrip("\n")))
+    else:
+        while True:
+            try:
+                user_input = get_input_from_stdin()
+                if user_input:
+                    print(emojifier.emojify_text(user_input))
+            except EOFError:
+                break
 
 
 if __name__ == "__main__":
