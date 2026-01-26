@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+
+import re
+import os
+import sys
+import json
+import random
+import argparse
+from typing import Dict, List, Union, Optional
+
+if __package__ is None:
+    PACKAGE = ""
+else:
+    PACKAGE = __package__
+SCRIPTDIR = os.path.dirname(os.path.realpath(__file__).removesuffix(PACKAGE))
+DEFAULT_EXCEPTIONS = ["was", "is", "", "", "", "", ""]
+SPLIT_REGEX = re.compile(r"([\s\-,.?!]+)")
+
+
+class Emojifier:
+    """
+    Python emojifier.
+    - Preserves separators
+    - Skips exceptions
+    - Strips "'s" and "'" before keyword lookup
+    - Random 'bounce' inserts of emoji/space with configurable probabilities
+    - Supports two JSON schemas:
+        A) {"keywords": {"word": ["😀","😁"]}}
+        B) {"emojis": ["😀","😁"], "keywords": {"word": [0,1]}}
+    """
+
+    def __init__(
+        self,
+        keywords: Dict[str, List[Union[str, int]]],
+        emojis: Optional[List[str]] = None,
+        exceptions: Optional[List[str]] = None,
+        left_bounce_prob: float = 0.3,
+        space_bounce_prob: float = 0.2,
+        right_bounce_prob: float = 0.2,
+        rng: Optional[random.Random] = None,
+    ):
+        """
+        :param keywords: Mapping of word -> list of emoji strings OR indices.
+        :param emojis: If using index-based keywords, provide the emoji array.
+        :param exceptions: List of words to leave untouched.
+        :param left_bounce_prob: Probability to add emoji before the word.
+        :param space_bounce_prob: Probability to add a space between word & emoji.
+        :param right_bounce_prob: Probability to add emoji after the word.
+        :param rng: Optional random.Random instance for deterministic behavior.
+        """
+        self.keywords = keywords or {}
+        self.emojis = emojis
+        self.exceptions = (exceptions or DEFAULT_EXCEPTIONS)[:]
+        self.left_bounce_prob = float(left_bounce_prob)
+        self.space_bounce_prob = float(space_bounce_prob)
+        self.right_bounce_prob = float(right_bounce_prob)
+        self.rng = rng or random.Random()
+
+        self._index_based = any(isinstance(e, int) for values in self.keywords.values() for e in values)
+        if self._index_based and not self.emojis:
+            raise ValueError("Index-based schema detected (keywords map to indices) but 'emojis' array not provided.")
+
+    @staticmethod
+    def _normalize_word_for_match(word: str) -> str:
+        return word.replace("'s", "").replace("'", "")
+
+    def _is_exception(self, word: str) -> bool:
+        return word in self.exceptions
+
+    def _random_element(self, items: List):
+        return items[self.rng.randrange(len(items))]
+
+    def _bounce(self, token: str, prob: float) -> str:
+        return token if self.rng.random() < prob else ""
+
+    def _pick_emoji_for_word(self, word: str) -> Optional[str]:
+        """
+        Returns a random emoji string for a matched word, or None if not found.
+        """
+        if word not in self.keywords:
+            return None
+
+        options = self.keywords[word]
+        if not options:
+            return None
+
+        if self._index_based:
+            idx = self._random_element(options)
+            if not (0 <= idx < len(self.emojis)):  # type: ignore
+                return None
+            return self.emojis[idx]  # type: ignore
+        else:
+            return self._random_element(options)
+
+    def emojify_word(self, word: str) -> str:
+        if len(word) == 1:
+            emoji = self._pick_emoji_for_word(word)
+            if emoji:
+                return emoji
+            else:
+                return word
+
+        if self._is_exception(word):
+            return word
+
+        test_word = self._normalize_word_for_match(word)
+        emoji = self._pick_emoji_for_word(test_word)
+        if not emoji:
+            return word
+
+        lead = self._bounce(emoji, self.left_bounce_prob)
+        space = "" if lead else self._bounce(" ", self.space_bounce_prob)
+        tail = "" if lead else self._bounce(emoji, self.right_bounce_prob)
+
+        return f"{lead}{word}{space}{emoji}{tail}"
+
+    def emojify_text(self, text: str) -> str:
+        parts = SPLIT_REGEX.split(text)
+        parts = [p for p in parts if p != ""]
+        mapped = [self.emojify_word(p) if not SPLIT_REGEX.fullmatch(p) else p for p in parts]
+        return "".join(mapped)
+
+
+def load_emojifier_from_json(
+    json_path: str,
+    *,
+    seed: Optional[int] = None,
+    exceptions: Optional[List[str]] = None,
+    left_bounce_prob: float = 0.3,
+    space_bounce_prob: float = 0.2,
+    right_bounce_prob: float = 0.2,
+) -> Emojifier:
+    """
+    Load keywords/emojis from a JSON file (Schema A or B) and return an EmojiEmojifier instance.
+    :param json_path: Path to JSON file.
+    :param seed: Optional deterministic seed for random behavior (tests).
+    :param exceptions: Optional override exceptions list.
+    :param left_bounce_prob: Probability for left emoji bounce (default 0.3).
+    :param space_bounce_prob: Probability for space bounce (default 0.2).
+    :param right_bounce_prob: Probability for right emoji bounce (default 0.2).
+    """
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    keywords = data.get("keywords")
+    emojis = data.get("emojis")
+    if not isinstance(keywords, dict):
+        raise ValueError("JSON must include a 'keywords' object.")
+
+    rng = random.Random(seed) if seed is not None else random.Random()
+
+    return Emojifier(
+        keywords=keywords,
+        emojis=emojis,
+        exceptions=exceptions,
+        left_bounce_prob=left_bounce_prob,
+        space_bounce_prob=space_bounce_prob,
+        right_bounce_prob=right_bounce_prob,
+        rng=rng,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Adds cringe emojis to text")
+    parser.add_argument(
+        "infile", nargs="?", type=argparse.FileType("r"), default=sys.stdin, help="Read from file (default STDIN)"
+    )
+    args = parser.parse_args()
+    emojifier = load_emojifier_from_json(os.path.join(SCRIPTDIR, "emojis.json"))
+
+    for text in args.infile:
+        print(emojifier.emojify_text(text.rstrip("\n")))
+
+
+if __name__ == "__main__":
+    main()
